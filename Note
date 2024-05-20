@@ -1,0 +1,212 @@
+from flask import Flask, request, jsonify
+import sqlite3
+from datetime import datetime
+
+app = Flask(__name__)
+
+def get_db_connection():
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            due_date TEXT,
+            status TEXT CHECK(status IN ('pending', 'in progress', 'completed')),
+            created_by TEXT NOT NULL,
+            updated_by TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type TEXT NOT NULL,
+            task_id INTEGER,
+            task_data TEXT,
+            timestamp TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+@app.before_first_request
+def setup_db():
+    init_db()
+
+@app.route('/tasks', methods=['POST'])
+def create_task():
+    data = request.json
+    title = data['title']
+    description = data.get('description', '')
+    due_date = data.get('due_date', None)
+    status = data.get('status', 'pending')
+    created_by = data['created_by']
+    created_at = datetime.now().isoformat()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO tasks (title, description, due_date, status, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (title, description, due_date, status, created_by, created_at))
+    conn.commit()
+    task_id = cursor.lastrowid
+
+    cursor.execute('''
+        INSERT INTO actions (action_type, task_id, task_data, timestamp)
+        VALUES (?, ?, ?, ?)
+    ''', ('create', task_id, str(data), created_at))
+    conn.commit()
+
+    conn.close()
+    return jsonify({'id': task_id, 'title': title, 'description': description, 'due_date': due_date, 'status': status, 'created_by': created_by, 'created_at': created_at}), 201
+
+@app.route('/tasks', methods=['GET'])
+def get_tasks():
+    due_date = request.args.get('due_date')
+    status = request.args.get('status')
+    created_by = request.args.get('created_by')
+    updated_by = request.args.get('updated_by')
+
+    query = 'SELECT * FROM tasks WHERE 1=1'
+    params = []
+
+    if due_date:
+        query += ' AND due_date = ?'
+        params.append(due_date)
+    if status:
+        query += ' AND status = ?'
+        params.append(status)
+    if created_by:
+        query += ' AND created_by = ?'
+        params.append(created_by)
+    if updated_by:
+        query += ' AND updated_by = ?'
+        params.append(updated_by)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    tasks = cursor.fetchall()
+    conn.close()
+
+    return jsonify([dict(row) for row in tasks])
+
+@app.route('/tasks/<int:task_id>', methods=['GET'])
+def get_task(task_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM tasks WHERE id = ?', (task_id,))
+    task = cursor.fetchone()
+    conn.close()
+
+    if task is None:
+        return jsonify({'error': 'Task not found'}), 404
+
+    return jsonify(dict(task))
+
+@app.route('/tasks/<int:task_id>', methods=['PUT'])
+def update_task(task_id):
+    data = request.json
+    title = data['title']
+    description = data.get('description', '')
+    due_date = data.get('due_date', None)
+    status = data.get('status', 'pending')
+    updated_by = data['updated_by']
+    updated_at = datetime.now().isoformat()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM tasks WHERE id = ?', (task_id,))
+    task = cursor.fetchone()
+
+    if task is None:
+        conn.close()
+        return jsonify({'error': 'Task not found'}), 404
+
+    cursor.execute('''
+        UPDATE tasks
+        SET title = ?, description = ?, due_date = ?, status = ?, updated_by = ?, updated_at = ?
+        WHERE id = ?
+    ''', (title, description, due_date, status, updated_by, updated_at, task_id))
+    conn.commit()
+
+    cursor.execute('''
+        INSERT INTO actions (action_type, task_id, task_data, timestamp)
+        VALUES (?, ?, ?, ?)
+    ''', ('update', task_id, str(data), updated_at))
+    conn.commit()
+
+    conn.close()
+    return jsonify({'id': task_id, 'title': title, 'description': description, 'due_date': due_date, 'status': status, 'updated_by': updated_by, 'updated_at': updated_at})
+
+@app.route('/tasks/<int:task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM tasks WHERE id = ?', (task_id,))
+    task = cursor.fetchone()
+
+    if task is None:
+        conn.close()
+        return jsonify({'error': 'Task not found'}), 404
+
+    cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+    conn.commit()
+
+    deleted_at = datetime.now().isoformat()
+    cursor.execute('''
+        INSERT INTO actions (action_type, task_id, task_data, timestamp)
+        VALUES (?, ?, ?, ?)
+    ''', ('delete', task_id, str(dict(task)), deleted_at))
+    conn.commit()
+
+    conn.close()
+    return jsonify({'result': 'Task deleted'}), 200
+
+@app.route('/undo', methods=['POST'])
+def undo_last_action():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM actions ORDER BY id DESC LIMIT 1')
+    action = cursor.fetchone()
+
+    if action is None:
+        conn.close()
+        return jsonify({'error': 'No actions to undo'}), 400
+
+    action_type = action['action_type']
+    task_id = action['task_id']
+    task_data = eval(action['task_data'])  # Convert string back to dictionary
+
+    if action_type == 'create':
+        cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+    elif action_type == 'update':
+        cursor.execute('''
+            UPDATE tasks
+            SET title = ?, description = ?, due_date = ?, status = ?, updated_by = ?, updated_at = ?
+            WHERE id = ?
+        ''', (task_data['title'], task_data['description'], task_data['due_date'], task_data['status'], task_data['updated_by'], task_data['updated_at'], task_id))
+    elif action_type == 'delete':
+        cursor.execute('''
+            INSERT INTO tasks (id, title, description, due_date, status, created_by, created_at, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (task_data['id'], task_data['title'], task_data['description'], task_data['due_date'], task_data['status'], task_data['created_by'], task_data['created_at'], task_data['updated_by'], task_data['updated_at']))
+
+    conn.commit()
+    cursor.execute('DELETE FROM actions WHERE id = ?', (action['id'],))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'result': 'Undo successful'}), 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
