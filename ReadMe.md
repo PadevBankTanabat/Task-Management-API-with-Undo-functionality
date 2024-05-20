@@ -46,7 +46,7 @@ The application will be accessible at [http://localhost:5000](http://localhost:5
 
 You can test the application using any API testing tool like Postman or curl. Here are some examples of how to test the different endpoints:
 
-### Create a Task
+#### Create a Task
 
 ```
 curl  -X  POST  -H  "Content-Type: application/json"  -d  '
@@ -62,13 +62,13 @@ curl  -X  POST  -H  "Content-Type: application/json"  -d  '
 
 ```
 
-### Get All Tasks
+#### Get All Tasks
 
 ```
 curl -X GET http://localhost:5000/tasks
 ```
 
-### Get a Specific Task
+#### Get a Specific Task
 
 Replace  `<task_id>`  with the ID of the task you want to retrieve.
 
@@ -76,7 +76,7 @@ Replace  `<task_id>`  with the ID of the task you want to retrieve.
 `curl -X GET http://localhost:5000/tasks/<task_id>`
 ```
 
-### Update a Task
+#### Update a Task
 
 Replace  `<task_id>`  with the ID of the task you want to update.
 
@@ -95,7 +95,7 @@ Replace  `<task_id>`  with the ID of the task you want to update.
 ' http://localhost:5000/tasks/<task_id>`
 ```
 
-### Delete a Task
+#### Delete a Task
 
 Replace  `<task_id>`  with the ID of the task you want to delete.
 
@@ -103,7 +103,7 @@ Replace  `<task_id>`  with the ID of the task you want to delete.
 `curl -X DELETE http://localhost:5000/tasks/<task_id>`
 ```
 
-### Undo the Last Action
+#### Undo the Last Action
 
 ```
 `curl -X POST http://localhost:5000/undo`
